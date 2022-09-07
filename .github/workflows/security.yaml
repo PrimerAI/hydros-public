@@ -1,0 +1,13 @@
+name: Security-Scan
+on:
+  push:
+    branches: [main]
+jobs:
+  security_scans:
+    uses: PrimerAI/build-tools/.github/workflows/security.yaml@main
+    secrets:
+      JIRA_USER: ${{ secrets.JIRA_USER }}
+      JIRA_TOKEN: ${{ secrets.JIRA_TOKEN }}
+      GH2JIRA_GH_APP_ID: ${{ secrets.GH2JIRA_GH_APP_ID }}
+      GH2JIRA_GH_INSTALL_ID: ${{ secrets.GH2JIRA_GH_INSTALL_ID }}
+      GH2JIRA_GH_APP_SECRET: ${{ secrets.GH2JIRA_GH_APP_SECRET }}
