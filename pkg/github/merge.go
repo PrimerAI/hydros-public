@@ -8,17 +8,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/shurcooL/githubv4"
-	"net/http"
-	"strings"
-
 	"github.com/cli/cli/v2/api"
-	ghContext "github.com/cli/cli/v2/context"
 	"github.com/cli/cli/v2/git"
-	"github.com/cli/cli/v2/pkg/cmd/pr/shared"
 	"github.com/cli/cli/v2/pkg/cmdutil"
 	"github.com/cli/cli/v2/pkg/iostreams"
 	"github.com/jlewi/hydros/pkg/github/ghrepo"
+	"github.com/shurcooL/githubv4"
+	"net/http"
+	"strings"
 )
 
 // TODO(jeremy): Can we just use githubv4.PullRequestMergeMethod
@@ -49,13 +46,14 @@ type MergeOptions struct {
 	HttpClient *http.Client
 	GitClient  *git.Client
 	IO         *iostreams.IOStreams
-	Branch     func() (string, error)
-	Remotes    func() (ghContext.Remotes, error)
+	//Branch     func() (string, error)
+	//Remotes    func() (ghContext.Remotes, error)
 
+	// The number for the PR
+	PRNumber int
 	// Finder is used to fetch status information about the PR.
-	Finder shared.PRFinder
-
-	SelectorArg  string
+	// Finder shared.PRFinder
+	// SelectorArg  string
 	DeleteBranch bool
 	MergeMethod  PullRequestMergeMethod
 
@@ -521,21 +519,25 @@ func (m *MergeContext) infof(format string, args ...interface{}) error {
 // NewMergeContext creates a new MergeContext.
 // This will locate the PR and get its current status.
 func NewMergeContext(opts *MergeOptions) (*MergeContext, error) {
-	if opts.Finder == nil {
-		return nil, errors.New("Finder can't be nil")
-	}
-	findOptions := shared.FindOptions{
-		Selector: opts.SelectorArg,
-		Fields:   []string{"id", "number", "state", "title", "lastCommit", "mergeStateStatus", "headRepositoryOwner", "headRefName", "baseRefName", "headRefOid", "isInMergeQueue", "isMergeQueueEnabled"},
-	}
-	pr, baseRepo, err := opts.Finder.Find(findOptions)
+	//if opts.Finder == nil {
+	//	return nil, errors.New("Finder can't be nil")
+	//}
+	//findOptions := shared.FindOptions{
+	//	Selector: opts.SelectorArg,
+	//	Fields:   []string{"id", "number", "state", "title", "lastCommit", "mergeStateStatus", "headRepositoryOwner", "headRefName", "baseRefName", "headRefOid", "isInMergeQueue", "isMergeQueueEnabled"},
+	//}
+	fields := []string{"id", "number", "state", "title", "lastCommit", "mergeStateStatus", "headRepositoryOwner", "headRefName", "baseRefName", "headRefOid", "isInMergeQueue", "isMergeQueueEnabled"}
+	pr, err := fetchPR(opts.HttpClient, opts.Repo, opts.PRNumber, fields)
+	//pr, baseRepo, err := opts.Finder.Find(findOptions)
 	if err != nil {
 		return nil, err
 	}
 
 	return &MergeContext{
-		opts:               opts,
-		pr:                 pr,
+		opts: opts,
+		pr: &api.PullRequest{
+			Number: opts.PRNumber,
+		},
 		cs:                 opts.IO.ColorScheme(),
 		baseRepo:           baseRepo,
 		isTerminal:         opts.IO.IsStdoutTTY(),
@@ -777,20 +779,20 @@ func allowsAdminOverride(status string) bool {
 	}
 }
 
-func remoteForMergeConflictResolution(baseRepo ghrepo.Interface, pr *api.PullRequest, opts *MergeOptions) *ghContext.Remote {
-	if !mergeConflictStatus(pr.MergeStateStatus) || !opts.CanDeleteLocalBranch {
-		return nil
-	}
-	remotes, err := opts.Remotes()
-	if err != nil {
-		return nil
-	}
-	remote, err := remotes.FindByRepo(baseRepo.RepoOwner(), baseRepo.RepoName())
-	if err != nil {
-		return nil
-	}
-	return remote
-}
+//func remoteForMergeConflictResolution(baseRepo ghrepo.Interface, pr *api.PullRequest, opts *MergeOptions) *ghContext.Remote {
+//	if !mergeConflictStatus(pr.MergeStateStatus) || !opts.CanDeleteLocalBranch {
+//		return nil
+//	}
+//	remotes, err := opts.Remotes()
+//	if err != nil {
+//		return nil
+//	}
+//	remote, err := remotes.FindByRepo(baseRepo.RepoOwner(), baseRepo.RepoName())
+//	if err != nil {
+//		return nil
+//	}
+//	return remote
+//}
 
 func mergeConflictStatus(status string) bool {
 	return status == MergeStateStatusDirty

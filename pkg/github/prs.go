@@ -17,10 +17,11 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 
 	"github.com/bradleyfalzon/ghinstallation/v2"
-	"github.com/cli/cli/api"
+	"github.com/cli/cli/v2/api"
+	ghAPI "github.com/cli/go-gh/pkg/api"
 	"github.com/go-logr/logr"
 	"github.com/go-logr/zapr"
-	"github.com/kubeflow/testing/go/pkg/ghrepo"
+	"github.com/jlewi/hydros/pkg/github/ghrepo"
 	"github.com/pkg/errors"
 	"github.com/shurcooL/githubv4"
 	"go.uber.org/zap"
@@ -122,10 +123,12 @@ func NewGithubRepoHelper(args *RepoHelperArgs) (*RepoHelper, error) {
 		args.Email = "unidentified@nota.real.domain.com"
 		log.Info("No email specified; using default", "name", args.Email)
 	}
-
+	// N.B. We aren't guaranteed to be using the same http client for Git that other parts of the code base is using
+	// Thats not ideal. However, the cli/cli Client package doesn't give us a way to inject an http client.
+	client := &http.Client{Transport: args.GhTr}
 	h := &RepoHelper{
 		transport:  args.GhTr,
-		client:     api.NewClient(api.ReplaceTripper(args.GhTr)),
+		client:     api.NewClientFromHTTP(client),
 		baseRepo:   args.BaseRepo,
 		log:        zapr.NewLogger(zap.L()),
 		fullDir:    args.FullDir,
@@ -211,7 +214,7 @@ func (h *RepoHelper) CreatePr(prMessage string, labels []string) error {
 	}
 	pr, err := api.CreatePullRequest(h.client, baseRepository, params)
 	if err != nil {
-		graphErr, ok := err.(*api.GraphQLErrorResponse)
+		graphErr, ok := err.(*ghAPI.GQLError)
 
 		if !ok {
 			h.log.Error(err, "There was a problem creating the PR,")
@@ -578,17 +581,12 @@ func (h *RepoHelper) Dir() string {
 // 1. enabling auto merge if a merge queue is required
 // 2. merging right away if able
 func (h *RepoHelper) MergePR() error {
-	// N.B. We aren't guaranteed to be using the same http client for Git that other parts of the code base is using
-	// Thats not ideal. However, the cli/cli Client package doesn't give us a way to inject an http client.
 	client := &http.Client{Transport: h.transport}
-
 	opts := &MergeOptions{
 		HttpClient:              client,
 		IO:                      nil,
 		Branch:                  nil,
 		Remotes:                 nil,
-		Finder:                  nil,
-		SelectorArg:             "",
 		DeleteBranch:            false,
 		MergeMethod:             0,
 		AutoMergeEnable:         false,
@@ -607,4 +605,34 @@ func (h *RepoHelper) MergePR() error {
 		return errors.Wrapf(err, "Failed to merge PR (or enable auto merge)")
 	}
 	return nil
+}
+
+func fetchPR(httpClient *http.Client, repo ghrepo.Interface, number int, fields []string) (*api.PullRequest, error) {
+	type response struct {
+		Repository struct {
+			PullRequest api.PullRequest
+		}
+	}
+
+	query := fmt.Sprintf(`
+	query PullRequestByNumber($owner: String!, $repo: String!, $pr_number: Int!) {
+		repository(owner: $owner, name: $repo) {
+			pullRequest(number: $pr_number) {%s}
+		}
+	}`, api.PullRequestGraphQL(fields))
+
+	variables := map[string]interface{}{
+		"owner":     repo.RepoOwner(),
+		"repo":      repo.RepoName(),
+		"pr_number": number,
+	}
+
+	var resp response
+	client := api.NewClientFromHTTP(httpClient)
+	err := client.GraphQL(repo.RepoHost(), query, variables, &resp)
+	if err != nil {
+		return nil, err
+	}
+
+	return &resp.Repository.PullRequest, nil
 }
