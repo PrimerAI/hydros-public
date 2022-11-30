@@ -8,7 +8,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/shurcooL/githubv4"
 	"net/http"
+	"strings"
 
 	"github.com/cli/cli/v2/api"
 	ghContext "github.com/cli/cli/v2/context"
@@ -19,6 +21,7 @@ import (
 	"github.com/cli/cli/v2/pkg/iostreams"
 )
 
+// TODO(jeremy): Can we just use githubv4.PullRequestMergeMethod
 type PullRequestMergeMethod int
 
 const (
@@ -302,16 +305,17 @@ func (m *MergeContext) canMerge() error {
 	return cmdutil.SilentError
 }
 
-// Merge the pull request. May prompt the user for input parameters for the merge.
+// Merge the pull request.
 func (m *MergeContext) merge() error {
 	if m.merged {
 		return nil
 	}
 
 	payload := mergePayload{
-		repo:            m.baseRepo,
-		pullRequestID:   m.pr.ID,
-		method:          m.opts.MergeMethod,
+		repo:          m.baseRepo,
+		pullRequestID: m.pr.ID,
+		// N.B. We are oppionated and use squash merge to give linear history.
+		method:          PullRequestMergeMethodSquash,
 		auto:            m.autoMerge,
 		commitSubject:   m.opts.Subject,
 		commitBody:      m.opts.Body,
@@ -327,46 +331,46 @@ func (m *MergeContext) merge() error {
 		}
 		// auto merge will either enable auto merge or add to the merge queue
 		payload.auto = true
-	} else {
-		// get user input if not already given
-		if m.opts.MergeStrategyEmpty {
-			if !m.opts.IO.CanPrompt() {
-				return cmdutil.FlagErrorf("--merge, --rebase, or --squash required when not running interactively")
-			}
-
-			apiClient := api.NewClientFromHTTP(m.httpClient)
-			r, err := api.GitHubRepo(apiClient, m.baseRepo)
-			if err != nil {
-				return err
-			}
-
-			payload.method, err = mergeMethodSurvey(r)
-			if err != nil {
-				return err
-			}
-
-			m.deleteBranch, err = deleteBranchSurvey(m.opts, m.crossRepoPR, m.localBranchExists)
-			if err != nil {
-				return err
-			}
-
-			allowEditMsg := payload.method != PullRequestMergeMethodRebase
-			for {
-				action, err := confirmSurvey(allowEditMsg)
-				if err != nil {
-					return fmt.Errorf("unable to confirm: %w", err)
-				}
-
-				submit, err := confirmSubmission(m.httpClient, m.opts, action, &payload)
-				if err != nil {
-					return err
-				}
-				if submit {
-					break
-				}
-			}
-		}
 	}
+	//} else {
+	//	// get user input if not already given
+	//	if m.opts.MergeStrategyEmpty {
+	//		if !m.opts.IO.CanPrompt() {
+	//			return cmdutil.FlagErrorf("--merge, --rebase, or --squash required when not running interactively")
+	//		}
+	//
+	//		apiClient := api.NewClientFromHTTP(m.httpClient)
+	//		r, err := api.GitHubRepo(apiClient, m.baseRepo)
+	//		if err != nil {
+	//			return err
+	//		}
+	//
+	//		//payload.method, err = mergeMethodSurvey(r)
+	//		//if err != nil {
+	//		//	return err
+	//		//}
+	//		//
+	//		//m.deleteBranch, err = deleteBranchSurvey(m.opts, m.crossRepoPR, m.localBranchExists)
+	//		//if err != nil {
+	//		//	return err
+	//		//}
+	//		//
+	//		//allowEditMsg := payload.method != PullRequestMergeMethodRebase
+	//		//for {
+	//		//	action, err := confirmSurvey(allowEditMsg)
+	//		//	if err != nil {
+	//		//		return fmt.Errorf("unable to confirm: %w", err)
+	//		//	}
+	//		//
+	//		//	submit, err := confirmSubmission(m.httpClient, m.opts, action, &payload)
+	//		//	if err != nil {
+	//		//		return err
+	//		//	}
+	//		//	if submit {
+	//		//		break
+	//		//	}
+	//		//}
+	//	}
 
 	err := mergePullRequest(m.httpClient, payload)
 	if err != nil {
@@ -496,9 +500,8 @@ func (m *MergeContext) merge() error {
 //}
 
 // Add the Pull Request to a merge queue
-// Admins can bypass the queue and merge directly
 func (m *MergeContext) shouldAddToMergeQueue() bool {
-	return m.mergeQueueRequired && !m.opts.UseAdmin
+	return m.mergeQueueRequired
 }
 
 func (m *MergeContext) warnf(format string, args ...interface{}) error {
@@ -802,4 +805,139 @@ func isImmediatelyMergeable(status string) bool {
 	default:
 		return false
 	}
+}
+
+type mergePayload struct {
+	repo            ghrepo.Interface
+	pullRequestID   string
+	method          PullRequestMergeMethod
+	auto            bool
+	commitSubject   string
+	commitBody      string
+	setCommitBody   bool
+	expectedHeadOid string
+	authorEmail     string
+}
+
+// TODO: drop after githubv4 gets updated
+type EnablePullRequestAutoMergeInput struct {
+	githubv4.MergePullRequestInput
+}
+
+// mergePullRequest is a helper function to actually merge the payload.
+// N.B. This function supports all the different merge methods because the code was inherited from GitHub's cli
+// so why not? But the higher APIs that call it don't support that.
+func mergePullRequest(client *http.Client, payload mergePayload) error {
+	input := githubv4.MergePullRequestInput{
+		PullRequestID: githubv4.ID(payload.pullRequestID),
+	}
+
+	switch payload.method {
+	case PullRequestMergeMethodMerge:
+		m := githubv4.PullRequestMergeMethodMerge
+		input.MergeMethod = &m
+	case PullRequestMergeMethodRebase:
+		m := githubv4.PullRequestMergeMethodRebase
+		input.MergeMethod = &m
+	case PullRequestMergeMethodSquash:
+		m := githubv4.PullRequestMergeMethodSquash
+		input.MergeMethod = &m
+	}
+
+	if payload.authorEmail != "" {
+		authorEmail := githubv4.String(payload.authorEmail)
+		input.AuthorEmail = &authorEmail
+	}
+	if payload.commitSubject != "" {
+		commitHeadline := githubv4.String(payload.commitSubject)
+		input.CommitHeadline = &commitHeadline
+	}
+	if payload.setCommitBody {
+		commitBody := githubv4.String(payload.commitBody)
+		input.CommitBody = &commitBody
+	}
+
+	if payload.expectedHeadOid != "" {
+		expectedHeadOid := githubv4.GitObjectID(payload.expectedHeadOid)
+		input.ExpectedHeadOid = &expectedHeadOid
+	}
+
+	variables := map[string]interface{}{
+		"input": input,
+	}
+
+	gql := api.NewClientFromHTTP(client)
+
+	if payload.auto {
+		var mutation struct {
+			EnablePullRequestAutoMerge struct {
+				ClientMutationId string
+			} `graphql:"enablePullRequestAutoMerge(input: $input)"`
+		}
+		variables["input"] = EnablePullRequestAutoMergeInput{input}
+		return gql.Mutate(payload.repo.RepoHost(), "PullRequestAutoMerge", &mutation, variables)
+	}
+
+	var mutation struct {
+		MergePullRequest struct {
+			ClientMutationId string
+		} `graphql:"mergePullRequest(input: $input)"`
+	}
+	return gql.Mutate(payload.repo.RepoHost(), "PullRequestMerge", &mutation, variables)
+}
+
+func disableAutoMerge(client *http.Client, repo ghrepo.Interface, prID string) error {
+	var mutation struct {
+		DisablePullRequestAutoMerge struct {
+			ClientMutationId string
+		} `graphql:"disablePullRequestAutoMerge(input: {pullRequestId: $prID})"`
+	}
+
+	variables := map[string]interface{}{
+		"prID": githubv4.ID(prID),
+	}
+
+	gql := api.NewClientFromHTTP(client)
+	return gql.Mutate(repo.RepoHost(), "PullRequestAutoMergeDisable", &mutation, variables)
+}
+
+// getMergeText gets the text for the merge.
+// N.B. I think this mimics obtaining the text that would be autoconstructed for the PR if merged via the UI.
+func getMergeText(client *http.Client, repo ghrepo.Interface, prID string, mergeMethod PullRequestMergeMethod) (string, string, error) {
+	var method githubv4.PullRequestMergeMethod
+	switch mergeMethod {
+	case PullRequestMergeMethodMerge:
+		method = githubv4.PullRequestMergeMethodMerge
+	case PullRequestMergeMethodRebase:
+		method = githubv4.PullRequestMergeMethodRebase
+	case PullRequestMergeMethodSquash:
+		method = githubv4.PullRequestMergeMethodSquash
+	}
+
+	var query struct {
+		Node struct {
+			PullRequest struct {
+				ViewerMergeHeadlineText string `graphql:"viewerMergeHeadlineText(mergeType: $method)"`
+				ViewerMergeBodyText     string `graphql:"viewerMergeBodyText(mergeType: $method)"`
+			} `graphql:"...on PullRequest"`
+		} `graphql:"node(id: $prID)"`
+	}
+
+	variables := map[string]interface{}{
+		"prID":   githubv4.ID(prID),
+		"method": method,
+	}
+
+	gql := api.NewClientFromHTTP(client)
+	err := gql.Query(repo.RepoHost(), "PullRequestMergeText", &query, variables)
+	if err != nil {
+		// Tolerate this API missing in older GitHub Enterprise
+		if strings.Contains(err.Error(), "Field 'viewerMergeHeadlineText' doesn't exist") ||
+			strings.Contains(err.Error(), "Field 'viewerMergeBodyText' doesn't exist") {
+			return "", "", nil
+		}
+		return "", "", err
+	}
+
+	return query.Node.PullRequest.ViewerMergeHeadlineText, query.Node.PullRequest.ViewerMergeBodyText, nil
 }
