@@ -541,6 +541,7 @@ func (s *Syncer) RunOnce(force bool) error {
 		log.Error(err, "Failed to create pr")
 		return err
 	}
+
 	log.Info("Sync succeeded")
 	return nil
 }

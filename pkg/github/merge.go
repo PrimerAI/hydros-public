@@ -44,8 +44,9 @@ const (
 //	Edit(string, string) (string, error)
 //}
 
+// MergeOptions are the options used to construct a context.
 type MergeOptions struct {
-	HttpClient func() (*http.Client, error)
+	HttpClient *http.Client
 	GitClient  *git.Client
 	IO         *iostreams.IOStreams
 	Branch     func() (string, error)
@@ -520,16 +521,14 @@ func (m *MergeContext) infof(format string, args ...interface{}) error {
 // NewMergeContext creates a new MergeContext.
 // This will locate the PR and get its current status.
 func NewMergeContext(opts *MergeOptions) (*MergeContext, error) {
+	if opts.Finder == nil {
+		return nil, errors.New("Finder can't be nil")
+	}
 	findOptions := shared.FindOptions{
 		Selector: opts.SelectorArg,
 		Fields:   []string{"id", "number", "state", "title", "lastCommit", "mergeStateStatus", "headRepositoryOwner", "headRefName", "baseRefName", "headRefOid", "isInMergeQueue", "isMergeQueueEnabled"},
 	}
 	pr, baseRepo, err := opts.Finder.Find(findOptions)
-	if err != nil {
-		return nil, err
-	}
-
-	httpClient, err := opts.HttpClient()
 	if err != nil {
 		return nil, err
 	}
@@ -540,7 +539,6 @@ func NewMergeContext(opts *MergeOptions) (*MergeContext, error) {
 		cs:                 opts.IO.ColorScheme(),
 		baseRepo:           baseRepo,
 		isTerminal:         opts.IO.IsStdoutTTY(),
-		httpClient:         httpClient,
 		merged:             pr.State == MergeStateStatusMerged,
 		deleteBranch:       opts.DeleteBranch,
 		crossRepoPR:        pr.HeadRepositoryOwner.Login != baseRepo.RepoOwner(),

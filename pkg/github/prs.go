@@ -2,6 +2,7 @@ package github
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -571,4 +572,39 @@ func (h *RepoHelper) RemoteBaseRef() plumbing.ReferenceName {
 // Dir returns the directory of the repository.
 func (h *RepoHelper) Dir() string {
 	return h.fullDir
+}
+
+// MergePR tries to merge the PR. This means either
+// 1. enabling auto merge if a merge queue is required
+// 2. merging right away if able
+func (h *RepoHelper) MergePR() error {
+	// N.B. We aren't guaranteed to be using the same http client for Git that other parts of the code base is using
+	// Thats not ideal. However, the cli/cli Client package doesn't give us a way to inject an http client.
+	client := &http.Client{Transport: h.transport}
+
+	opts := &MergeOptions{
+		HttpClient:              client,
+		IO:                      nil,
+		Branch:                  nil,
+		Remotes:                 nil,
+		Finder:                  nil,
+		SelectorArg:             "",
+		DeleteBranch:            false,
+		MergeMethod:             0,
+		AutoMergeEnable:         false,
+		AuthorEmail:             "",
+		Body:                    "",
+		BodySet:                 false,
+		Subject:                 "",
+		IsDeleteBranchIndicated: false,
+		CanDeleteLocalBranch:    false,
+		MergeStrategyEmpty:      false,
+		MatchHeadCommit:         "",
+	}
+
+	if err := MergePR(opts); err != nil {
+		h.log.Error(err, "Failed to merge PR (or enable auto merge)")
+		return errors.Wrapf(err, "Failed to merge PR (or enable auto merge)")
+	}
+	return nil
 }

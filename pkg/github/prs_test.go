@@ -19,19 +19,33 @@ import (
 )
 
 const (
-	appID      = int64(263648)
-	privateKey = "gcpSecretManager:///projects/dev-starling/secrets/annotater-bot/versions/latest"
+	// TODO(jeremy): Delete this commented out code we should be switched over to using the hydros.
+	// appID      = int64(263648)
+	// privateKey = "gcpSecretManager:///projects/dev-starling/secrets/annotater-bot/versions/latest"
+	appID      = int64(266158)
+	privateKey = "secrets/hydros-bot.2022-11-27.private-key.pem"
+
+	// Use the repository https://github.com/jlewi/hydros-hydrated for testing
+	testOrg  = "jlewi"
+	testRepo = "hydros-hydrated"
 )
 
 func getTransportManager() (*TransportManager, error) {
 	log := zapr.NewLogger(zap.L())
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+
+	hydrosKeyFile := filepath.Join(home, privateKey)
 
 	f := &files.Factory{}
 	h, err := f.Get(privateKey)
 	if err != nil {
 		return nil, err
 	}
-	r, err := h.NewReader(privateKey)
+	r, err := h.NewReader(hydrosKeyFile)
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +95,7 @@ func Test_PrepareBranch(t *testing.T) {
 	expected := "a9b473353b73a4cd5e2c8809c4c16a0e9e164129"
 
 	args := &RepoHelperArgs{
-		BaseRepo:   ghrepo.New("starlingai", "gitops-test-repo"),
+		BaseRepo:   ghrepo.New(testOrg, testRepo),
 		GhTr:       nil,
 		Name:       "notset",
 		Email:      "notset@acme.com",
@@ -171,11 +185,11 @@ func Test_PrepareCommitAndPush(t *testing.T) {
 	now := time.Now().Format("20060102-030405")
 
 	args := &RepoHelperArgs{
-		BaseRepo:   ghrepo.New("starlingai", "gitops-test-repo"),
+		BaseRepo:   ghrepo.New(testOrg, testRepo),
 		GhTr:       nil,
-		Name:       "notset",
-		Email:      "notset@acme.com",
-		BaseBranch: "test-cases/clone-1",
+		Name:       "hydros",
+		Email:      "hydros@hydros.io",
+		BaseBranch: "main",
 		BranchName: "clone-test" + now,
 	}
 
@@ -210,6 +224,14 @@ func Test_PrepareCommitAndPush(t *testing.T) {
 		}
 
 		if err := repo.CommitAndPush("Commit from test", true); err != nil {
+			return err
+		}
+
+		if err := repo.CreatePr("Hydros e2e test", []string{}); err != nil {
+			return err
+		}
+
+		if err := repo.MergePR(); err != nil {
 			return err
 		}
 		return nil
