@@ -12,9 +12,10 @@ import (
 // This is an integration test. It will try to merge the PR specified. This is useful for manual development.
 // The PR is hardcoded so once the PR is successfully merged you would need to create a new one and then update the
 // test.
+// To run the full lifecycle of creating a PR run prs_test.go
 func Test_merge_pr(t *testing.T) {
 	util.SetupLogger("info", true)
-	prURL := "https://github.com/jlewi/hydros-hydrated/pull/15"
+	prURL := "https://github.com/jlewi/hydros-hydrated/pull/17"
 	repo, number, err := parsePRURL(prURL)
 	if err != nil {
 		t.Fatalf("Failed to parse URL %v; error %v", prURL, err)
@@ -38,15 +39,9 @@ func Test_merge_pr(t *testing.T) {
 
 	client := &http.Client{Transport: &AddHeaderTransport{T: tr}}
 	opts := &MergeOptions{
-		HttpClient:  client,
-		Repo:        repo,
-		PRNumber:    pr.Number,
-		MergeMethod: 0,
-		//AutoMergeEnable:         true,
-		//IsDeleteBranchIndicated: false,
-		//CanDeleteLocalBranch:    false,
-		//MergeStrategyEmpty:      false,
-		//MatchHeadCommit:         "",
+		HttpClient: client,
+		Repo:       repo,
+		PRNumber:   pr.Number,
 	}
 
 	m, err := NewMergeContext(opts)

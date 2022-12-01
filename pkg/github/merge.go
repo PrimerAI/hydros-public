@@ -17,16 +17,6 @@ import (
 	"net/url"
 	"regexp"
 	"strconv"
-	"strings"
-)
-
-// TODO(jeremy): Can we just use githubv4.PullRequestMergeMethod
-type PullRequestMergeMethod int
-
-const (
-	PullRequestMergeMethodMerge PullRequestMergeMethod = iota
-	PullRequestMergeMethodRebase
-	PullRequestMergeMethodSquash
 )
 
 const (
@@ -46,8 +36,6 @@ type MergeOptions struct {
 	// The number for the PR
 	PRNumber int
 	Repo     ghrepo.Interface
-
-	MergeMethod PullRequestMergeMethod
 }
 
 // ErrAlreadyInMergeQueue indicates that the pull request is already in a merge queue
@@ -75,6 +63,7 @@ func (m *MergeContext) inMergeQueue() error {
 		log.Info("Pull request already in merge queue")
 		return ErrAlreadyInMergeQueue
 	}
+
 	return nil
 }
 
@@ -91,7 +80,7 @@ func (m *MergeContext) merge() error {
 		repo:          m.opts.Repo,
 		pullRequestID: m.pr.ID,
 		// N.B. We are oppionated and use squash merge to give linear history.
-		method: PullRequestMergeMethodSquash,
+		method: githubv4.PullRequestMergeMethodSquash,
 	}
 
 	// We need to set payload.auto which controls whether an
@@ -205,7 +194,7 @@ func isImmediatelyMergeable(status string) bool {
 type mergePayload struct {
 	repo            ghrepo.Interface
 	pullRequestID   string
-	method          PullRequestMergeMethod
+	method          githubv4.PullRequestMergeMethod
 	auto            bool
 	commitSubject   string
 	commitBody      string
@@ -230,18 +219,7 @@ func mergePullRequest(client *http.Client, payload mergePayload) error {
 		PullRequestID: githubv4.ID(payload.pullRequestID),
 	}
 
-	switch payload.method {
-	case PullRequestMergeMethodMerge:
-		m := githubv4.PullRequestMergeMethodMerge
-		input.MergeMethod = &m
-	case PullRequestMergeMethodRebase:
-		m := githubv4.PullRequestMergeMethodRebase
-		input.MergeMethod = &m
-	case PullRequestMergeMethodSquash:
-		m := githubv4.PullRequestMergeMethodSquash
-		input.MergeMethod = &m
-	}
-
+	input.MergeMethod = &payload.method
 	if payload.authorEmail != "" {
 		authorEmail := githubv4.String(payload.authorEmail)
 		input.AuthorEmail = &authorEmail
@@ -285,47 +263,6 @@ func mergePullRequest(client *http.Client, payload mergePayload) error {
 		} `graphql:"mergePullRequest(input: $input)"`
 	}
 	return gql.Mutate(payload.repo.RepoHost(), "PullRequestMerge", &mutation, variables)
-}
-
-// getMergeText gets the text for the merge.
-// N.B. I think this mimics obtaining the text that would be autoconstructed for the PR if merged via the UI.
-func getMergeText(client *http.Client, repo ghrepo.Interface, prID string, mergeMethod PullRequestMergeMethod) (string, string, error) {
-	var method githubv4.PullRequestMergeMethod
-	switch mergeMethod {
-	case PullRequestMergeMethodMerge:
-		method = githubv4.PullRequestMergeMethodMerge
-	case PullRequestMergeMethodRebase:
-		method = githubv4.PullRequestMergeMethodRebase
-	case PullRequestMergeMethodSquash:
-		method = githubv4.PullRequestMergeMethodSquash
-	}
-
-	var query struct {
-		Node struct {
-			PullRequest struct {
-				ViewerMergeHeadlineText string `graphql:"viewerMergeHeadlineText(mergeType: $method)"`
-				ViewerMergeBodyText     string `graphql:"viewerMergeBodyText(mergeType: $method)"`
-			} `graphql:"...on PullRequest"`
-		} `graphql:"node(id: $prID)"`
-	}
-
-	variables := map[string]interface{}{
-		"prID":   githubv4.ID(prID),
-		"method": method,
-	}
-
-	gql := api.NewClientFromHTTP(client)
-	err := gql.Query(repo.RepoHost(), "PullRequestMergeText", &query, variables)
-	if err != nil {
-		// Tolerate this API missing in older GitHub Enterprise
-		if strings.Contains(err.Error(), "Field 'viewerMergeHeadlineText' doesn't exist") ||
-			strings.Contains(err.Error(), "Field 'viewerMergeBodyText' doesn't exist") {
-			return "", "", nil
-		}
-		return "", "", err
-	}
-
-	return query.Node.PullRequest.ViewerMergeHeadlineText, query.Node.PullRequest.ViewerMergeBodyText, nil
 }
 
 var pullURLRE = regexp.MustCompile(`^/([^/]+)/([^/]+)/pull/(\d+)`)
