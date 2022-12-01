@@ -3,10 +3,11 @@
 package github
 
 import (
-	"github.com/cli/cli/v2/api"
-	"github.com/jlewi/hydros/pkg/util"
 	"net/http"
 	"testing"
+
+	"github.com/cli/cli/v2/api"
+	"github.com/jlewi/hydros/pkg/util"
 )
 
 // This is an integration test. It will try to merge the PR specified. This is useful for manual development.

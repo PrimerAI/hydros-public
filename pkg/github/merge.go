@@ -6,6 +6,11 @@ package github
 
 import (
 	"fmt"
+	"net/http"
+	"net/url"
+	"regexp"
+	"strconv"
+
 	"github.com/cli/cli/v2/api"
 	"github.com/go-logr/logr"
 	"github.com/go-logr/zapr"
@@ -13,10 +18,6 @@ import (
 	"github.com/pkg/errors"
 	"github.com/shurcooL/githubv4"
 	"go.uber.org/zap"
-	"net/http"
-	"net/url"
-	"regexp"
-	"strconv"
 )
 
 const (

@@ -3,9 +3,10 @@ package ghrepo
 
 import (
 	"fmt"
-	"github.com/jlewi/hydros/pkg/github/ghinstance"
 	"net/url"
 	"strings"
+
+	"github.com/jlewi/hydros/pkg/github/ghinstance"
 
 	ghAuth "github.com/cli/go-gh/pkg/auth"
 	"github.com/cli/go-gh/pkg/repository"
