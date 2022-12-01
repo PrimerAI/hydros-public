@@ -3,11 +3,9 @@ package github
 import (
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -610,19 +608,11 @@ func (adt *AddHeaderTransport) RoundTrip(req *http.Request) (*http.Response, err
 func (h *RepoHelper) MergePR(prNumber int) error {
 	client := &http.Client{Transport: &AddHeaderTransport{T: h.transport}}
 	opts := &MergeOptions{
-		HttpClient: client,
-		IO:         nil,
-		Repo:       h.baseRepo,
-		PRNumber:   prNumber,
-		//Branch:                  nil,
-		//Remotes:                 nil,
-		DeleteBranch:            false,
+		HttpClient:              client,
+		Repo:                    h.baseRepo,
+		PRNumber:                prNumber,
 		MergeMethod:             0,
-		AutoMergeEnable:         false,
-		AuthorEmail:             "",
-		Body:                    "",
-		BodySet:                 false,
-		Subject:                 "",
+		AutoMergeEnable:         true,
 		IsDeleteBranchIndicated: false,
 		CanDeleteLocalBranch:    false,
 		MergeStrategyEmpty:      false,
@@ -667,30 +657,4 @@ func fetchPR(httpClient *http.Client, repo ghrepo.Interface, number int, fields 
 	}
 
 	return &resp.Repository.PullRequest, nil
-}
-
-var pullURLRE = regexp.MustCompile(`^/([^/]+)/([^/]+)/pull/(\d+)`)
-
-func parsePRURL(prURL string) (ghrepo.Interface, int, error) {
-	if prURL == "" {
-		return nil, 0, fmt.Errorf("invalid URL: %q", prURL)
-	}
-
-	u, err := url.Parse(prURL)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	if u.Scheme != "https" && u.Scheme != "http" {
-		return nil, 0, fmt.Errorf("invalid scheme: %s", u.Scheme)
-	}
-
-	m := pullURLRE.FindStringSubmatch(u.Path)
-	if m == nil {
-		return nil, 0, fmt.Errorf("not a pull request URL: %s", prURL)
-	}
-
-	repo := ghrepo.NewWithHost(m[1], m[2], u.Hostname())
-	prNumber, _ := strconv.Atoi(m[3])
-	return repo, prNumber, nil
 }

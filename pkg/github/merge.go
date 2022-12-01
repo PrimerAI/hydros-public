@@ -5,15 +5,18 @@ package github
 // https://github.com/cli/cli/blob/trunk/pkg/cmd/pr/merge/merge.go
 
 import (
-	"errors"
+	"fmt"
 	"github.com/cli/cli/v2/api"
-	"github.com/cli/cli/v2/git"
-	"github.com/cli/cli/v2/pkg/iostreams"
+	"github.com/go-logr/logr"
 	"github.com/go-logr/zapr"
 	"github.com/jlewi/hydros/pkg/github/ghrepo"
+	"github.com/pkg/errors"
 	"github.com/shurcooL/githubv4"
 	"go.uber.org/zap"
 	"net/http"
+	"net/url"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -29,6 +32,7 @@ const (
 const (
 	MergeStateStatusBehind   = "BEHIND"
 	MergeStateStatusBlocked  = "BLOCKED"
+	MergeStateStatusClosed   = "CLOSED"
 	MergeStateStatusClean    = "CLEAN"
 	MergeStateStatusDirty    = "DIRTY"
 	MergeStateStatusHasHooks = "HAS_HOOKS"
@@ -36,44 +40,16 @@ const (
 	MergeStateStatusUnstable = "UNSTABLE"
 )
 
-//type editor interface {
-//	Edit(string, string) (string, error)
-//}
-
 // MergeOptions are the options used to construct a context.
 type MergeOptions struct {
 	HttpClient *http.Client
-	GitClient  *git.Client
-	IO         *iostreams.IOStreams
-	//Branch     func() (string, error)
-	//Remotes    func() (ghContext.Remotes, error)
-
 	// The number for the PR
 	PRNumber int
 	Repo     ghrepo.Interface
-	// Finder is used to fetch status information about the PR.
-	// Finder shared.PRFinder
-	// SelectorArg  string
-	DeleteBranch bool
-	MergeMethod  PullRequestMergeMethod
 
-	AutoMergeEnable bool
-	// TODO(jeremy): There's no reason to support disabling AutoMerge.
-	// AutoMergeDisable bool
+	MergeMethod PullRequestMergeMethod
 
-	AuthorEmail string
-
-	Body    string
-	BodySet bool
-	Subject string
-
-	// TODO(jeremy) Delete this
-	// We don't want to edit things
-	// Editor  editor
-
-	// TODO(jeremy): Don't support admin overrides. Existing tools (e.g. GitHub UI or CLI should be used for admin
-	// functionality).
-	// UseAdmin                bool
+	AutoMergeEnable         bool
 	IsDeleteBranchIndicated bool
 	CanDeleteLocalBranch    bool
 	MergeStrategyEmpty      bool
@@ -84,34 +60,19 @@ type MergeOptions struct {
 var ErrAlreadyInMergeQueue = errors.New("already in merge queue")
 
 // MergeContext contains state and dependencies to merge a pull request.
+//
+// It is oppinionated about how merges should be done
+// i) If a PR can't be merged e.g. because of status checks then it will enable autoMerge so it will be merged as soon
+//
+//	as possible
+//
+// ii) It uses squash method to do the merge to preserve linear history.
 type MergeContext struct {
 	pr       *api.PullRequest
 	baseRepo ghrepo.Interface
-	//httpClient *http.Client
-	opts *MergeOptions
-	// TODO(jeremy): Can we delete this? Why would we need a color scheme
-	cs *iostreams.ColorScheme
-	// TODO(jeremy): Can we delete this? Why would we need a terminal
-	isTerminal bool
-	merged     bool
-	// TODO(jeremy): Can we delete this? Why would we need a local branch?
-	localBranchExists bool
-	autoMerge         bool
-	crossRepoPR       bool
-	// TODO(jeremy): Do we need this? If this is enabled for the repository doesn't it get handled automatically?
-	deleteBranch       bool
-	switchedToBranch   string
-	mergeQueueRequired bool
+	opts     *MergeOptions
+	log      logr.Logger
 }
-
-// TODO(jeremy): Delete this? Why would we want to support disabling automerge if its already enabled on the PR?
-// Attempt to disable auto merge on the pull request.
-//func (m *MergeContext) disableAutoMerge() error {
-//	if err := disableAutoMerge(m.httpClient, m.baseRepo, m.pr.ID); err != nil {
-//		return err
-//	}
-//	return m.infof("%s Auto-merge disabled for pull request #%d\n", m.cs.SuccessIconWithColor(m.cs.Green), m.pr.Number)
-//}
 
 // Check if this pull request is in a merge queue
 func (m *MergeContext) inMergeQueue() error {
@@ -124,65 +85,18 @@ func (m *MergeContext) inMergeQueue() error {
 	return nil
 }
 
-// Warn if the pull request and the remote branch have diverged.
-// TODO(jeremy): Delete this?
-// Can we leave this up to branch protections to enforce this?
-//func (m *MergeContext) warnIfDiverged() {
-//	if m.opts.SelectorArg != "" || len(m.pr.Commits.Nodes) == 0 {
-//		return
-//	}
-//
-//	localBranchLastCommit, err := m.opts.GitClient.LastCommit(context.Background())
-//	if err != nil {
-//		return
-//	}
-//
-//	if localBranchLastCommit.Sha == m.pr.Commits.Nodes[len(m.pr.Commits.Nodes)-1].Commit.OID {
-//		return
-//	}
-//
-//	_ = m.warnf("%s Pull request #%d (%s) has diverged from local branch\n", m.cs.Yellow("!"), m.pr.Number, m.pr.Title)
-//}
-
-// Check if the current state of the pull request allows for merging
-func (m *MergeContext) canMerge() error {
-	if m.mergeQueueRequired {
-		// a pull request can always be added to the merge queue
-		return nil
-	}
-
-	// TODO(jeremy): Can we get rid of the codepaths involving useAdmin since we don't want to support using admin
-	// privileges?
-	useAdmin := false
-	reason := blockedReason(m.pr.MergeStateStatus, useAdmin)
-
-	if reason == "" || m.autoMerge || m.merged {
-		return nil
-	}
-
-	log := zapr.NewLogger(zap.L())
-	log.Info("Pull request not mergeable", "number", m.pr.Number, "reason", reason)
-	return errors.New("pull request is not mergeable and autoMerge isn't enabled")
-}
-
 // Merge the pull request.
 func (m *MergeContext) merge() error {
 	log := zapr.NewLogger(zap.L())
-	if m.merged {
-		return nil
-	}
 
 	payload := mergePayload{
 		repo:          m.baseRepo,
 		pullRequestID: m.pr.ID,
 		// N.B. We are oppionated and use squash merge to give linear history.
-		method:          PullRequestMergeMethodSquash,
-		auto:            m.autoMerge,
-		commitSubject:   m.opts.Subject,
-		commitBody:      m.opts.Body,
-		setCommitBody:   m.opts.BodySet,
+		method: PullRequestMergeMethodSquash,
+		// Automatically enable automerge if there is a queue
+		auto:            true,
 		expectedHeadOid: m.opts.MatchHeadCommit,
-		authorEmail:     m.opts.AuthorEmail,
 	}
 
 	if m.shouldAddToMergeQueue() {
@@ -326,7 +240,7 @@ func (m *MergeContext) merge() error {
 
 // Add the Pull Request to a merge queue
 func (m *MergeContext) shouldAddToMergeQueue() bool {
-	return m.mergeQueueRequired
+	return m.pr.IsMergeQueueEnabled
 }
 
 // NewMergeContext creates a new MergeContext.
@@ -356,38 +270,45 @@ func NewMergeContext(opts *MergeOptions) (*MergeContext, error) {
 		return nil, err
 	}
 
+	log := zapr.NewLogger(zap.L()).WithValues("prNumber", pr.Number)
 	return &MergeContext{
-		opts: opts,
-		pr:   pr,
-		//		cs:                 opts.IO.ColorScheme(),
+		opts:     opts,
+		pr:       pr,
+		log:      log,
 		baseRepo: opts.Repo,
-		//		isTerminal:         opts.IO.IsStdoutTTY(),
-		merged:       pr.State == MergeStateStatusMerged,
-		deleteBranch: opts.DeleteBranch,
-		crossRepoPR:  pr.HeadRepositoryOwner.Login != opts.Repo.RepoOwner(),
-		autoMerge:    opts.AutoMergeEnable && !isImmediatelyMergeable(pr.MergeStateStatus),
-		//		localBranchExists:  opts.CanDeleteLocalBranch && opts.GitClient.HasLocalBranch(context.Background(), pr.HeadRefName),
-		mergeQueueRequired: pr.IsMergeQueueEnabled,
+		//merged:             pr.State == MergeStateStatusMerged,
+		//mergeQueueRequired: pr.IsMergeQueueEnabled,
 	}, nil
 }
 
 // MergePR merges a PR
 func (m *MergeContext) MergePR() error {
-
+	log := m.log
+	pr := m.pr
+	if pr.State == MergeStateStatusClosed {
+		log.Info("PR can't be merged it has been closed")
+		return errors.Errorf("Can't merge PR %v it has been closed", pr.URL)
+	}
+	if pr.State == MergeStateStatusMerged {
+		log.Info("PR has already been merged")
+		return nil
+	}
 	if err := m.inMergeQueue(); err != nil {
-		return err
+		log.Info("PR is already in merge queue")
+		return nil
 	}
 
-	// TODO(jeremy): This isn't a code path we should need.
-	// no further action is possible when disabling auto merge
-	//if opts.AutoMergeDisable {
-	//	return ctx.disableAutoMerge()
-	//}
-	//
-	//ctx.warnIfDiverged()
+	if isImmediatelyMergeable(m.pr.MergeStateStatus) {
+		log.Info("PR is immediately mergeable")
+	}
 
-	if err := m.canMerge(); err != nil {
-		return err
+	if pr.IsMergeQueueEnabled {
+		log.Info("PR will be added to merge queue")
+	}
+
+	if reason, blocked := blockedReason(m.pr.MergeStateStatus); blocked {
+		log.Info("PR merging is blocked", "reason", reason)
+		return errors.Errorf("PR merging is blocked; MergeStateStatus: %v reason: %v", m.pr.MergeStateStatus, reason)
 	}
 
 	if err := m.merge(); err != nil {
@@ -568,22 +489,17 @@ func (m *MergeContext) MergePR() error {
 //}
 
 // blockedReason translates various MergeStateStatus GraphQL values into human-readable reason
-func blockedReason(status string, useAdmin bool) string {
+// The bool indicates whether merging is blocked
+func blockedReason(status string) (string, bool) {
 	switch status {
 	case MergeStateStatusBlocked:
-		if useAdmin {
-			return ""
-		}
-		return "the base branch policy prohibits the merge"
+		return "the base branch policy prohibits the merge", true
 	case MergeStateStatusBehind:
-		if useAdmin {
-			return ""
-		}
-		return "the head branch is not up to date with the base branch"
+		return "the head branch is not up to date with the base branch", true
 	case MergeStateStatusDirty:
-		return "the merge commit cannot be cleanly created"
+		return "the merge commit cannot be cleanly created", true
 	default:
-		return ""
+		return "", false
 	}
 }
 
@@ -757,4 +673,30 @@ func getMergeText(client *http.Client, repo ghrepo.Interface, prID string, merge
 	}
 
 	return query.Node.PullRequest.ViewerMergeHeadlineText, query.Node.PullRequest.ViewerMergeBodyText, nil
+}
+
+var pullURLRE = regexp.MustCompile(`^/([^/]+)/([^/]+)/pull/(\d+)`)
+
+func parsePRURL(prURL string) (ghrepo.Interface, int, error) {
+	if prURL == "" {
+		return nil, 0, fmt.Errorf("invalid URL: %q", prURL)
+	}
+
+	u, err := url.Parse(prURL)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	if u.Scheme != "https" && u.Scheme != "http" {
+		return nil, 0, fmt.Errorf("invalid scheme: %s", u.Scheme)
+	}
+
+	m := pullURLRE.FindStringSubmatch(u.Path)
+	if m == nil {
+		return nil, 0, fmt.Errorf("not a pull request URL: %s", prURL)
+	}
+
+	repo := ghrepo.NewWithHost(m[1], m[2], u.Hostname())
+	prNumber, _ := strconv.Atoi(m[3])
+	return repo, prNumber, nil
 }
