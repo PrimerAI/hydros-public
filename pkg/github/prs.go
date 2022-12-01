@@ -3,9 +3,11 @@ package github
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -147,7 +149,7 @@ func NewGithubRepoHelper(args *RepoHelperArgs) (*RepoHelper, error) {
 //
 //	Forkref will either be OWNER:BRANCH when a different repository is used as the fork.
 //	or it will be just BRANCH when merging from a branch in the same Repo as Repo
-func (h *RepoHelper) CreatePr(prMessage string, labels []string) error {
+func (h *RepoHelper) CreatePr(prMessage string, labels []string) (*api.PullRequest, error) {
 	log := h.log.WithValues("Repo", h.baseRepo.RepoName(), "Org", h.baseRepo.RepoOwner())
 	lines := strings.SplitN(prMessage, "\n", 2)
 
@@ -173,7 +175,7 @@ func (h *RepoHelper) CreatePr(prMessage string, labels []string) error {
 		repoLabels, err := api.RepoLabels(h.client, h.baseRepo)
 		if err != nil {
 			log.Error(err, "Failed to fetch Repo labels")
-			return err
+			return nil, err
 		}
 
 		labelNameToID := map[string]string{}
@@ -210,7 +212,7 @@ func (h *RepoHelper) CreatePr(prMessage string, labels []string) error {
 	// Query the GitHub API to get actual repository info.
 	baseRepository, err := api.GitHubRepo(h.client, h.baseRepo)
 	if err != nil {
-		return errors.WithStack(errors.Wrapf(err, "there was an error getting repository information"))
+		return nil, errors.WithStack(errors.Wrapf(err, "there was an error getting repository information"))
 	}
 	pr, err := api.CreatePullRequest(h.client, baseRepository, params)
 	if err != nil {
@@ -218,18 +220,18 @@ func (h *RepoHelper) CreatePr(prMessage string, labels []string) error {
 
 		if !ok {
 			h.log.Error(err, "There was a problem creating the PR,")
-			return err
+			return nil, err
 		}
 
 		matcher, cErr := regexp.Compile("A pull request already exists.*")
 		if cErr != nil {
 			log.Error(cErr, "Failed to compile regex; could not check if err is PR exists", "graphErr", graphErr)
-			return err
+			return nil, err
 		}
 		for _, gErr := range graphErr.Errors {
 			if !matcher.MatchString(gErr.Message) {
 				h.log.Error(err, "There was a problem creating the PR,")
-				return err
+				return nil, err
 			}
 			h.log.Info(gErr.Message)
 
@@ -237,7 +239,7 @@ func (h *RepoHelper) CreatePr(prMessage string, labels []string) error {
 			existingPR, err := h.PullRequestForBranch()
 			if err != nil {
 				h.log.Error(err, "Failed to locate existing PR", "forkRef", forkRef, "baseBranch", h.BaseBranch)
-				return err
+				return nil, err
 			}
 
 			url := ""
@@ -245,14 +247,28 @@ func (h *RepoHelper) CreatePr(prMessage string, labels []string) error {
 				url = existingPR.URL
 			}
 			h.log.Info("A pull request for the branch already exists", "forkRef", forkRef, "baseBranch", h.BaseBranch, "prUrl", url)
-			return nil
+
+			// TODO(jeremy): This is pretty kludgy. Can we get rid of our copy of pullrequest and just use the CLI's
+			// version.
+			pr := &api.PullRequest{
+				ID:     existingPR.ID,
+				URL:    existingPR.URL,
+				Number: existingPR.Number,
+			}
+			return pr, nil
 		}
 	}
 	h.log.Info("Created PR", "url", pr.URL)
-	return nil
+
+	// When a PR is created number isn't populated but we can get it from the URL
+	_, number, err := parsePRURL(pr.URL)
+	pr.Number = number
+
+	return pr, err
 }
 
 // PullRequestForBranch returns the PR for the given branch if it exists and nil if no PR exists.
+// TODO(jeremy): Can we change this to api.PullRequest?
 func (h *RepoHelper) PullRequestForBranch() (*PullRequest, error) {
 	baseBranch := h.BaseBranch
 	headBranch := h.BranchName
@@ -302,7 +318,7 @@ func (h *RepoHelper) PullRequestForBranch() (*PullRequest, error) {
 	}
 
 	var resp response
-	err := h.client.GraphQL(query, variables, &resp)
+	err := h.client.GraphQL(h.baseRepo.RepoHost(), query, variables, &resp)
 	if err != nil {
 		return nil, err
 	}
@@ -577,16 +593,29 @@ func (h *RepoHelper) Dir() string {
 	return h.fullDir
 }
 
+type AddHeaderTransport struct {
+	T http.RoundTripper
+}
+
+func (adt *AddHeaderTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Per https://docs.github.com/en/graphql/overview/schema-previews#merge-info-preview
+	// we need to enable previw mode to get mergeStateStatus
+	req.Header.Add("Accept", "application/vnd.github.merge-info-preview+json")
+	return adt.T.RoundTrip(req)
+}
+
 // MergePR tries to merge the PR. This means either
 // 1. enabling auto merge if a merge queue is required
 // 2. merging right away if able
-func (h *RepoHelper) MergePR() error {
-	client := &http.Client{Transport: h.transport}
+func (h *RepoHelper) MergePR(prNumber int) error {
+	client := &http.Client{Transport: &AddHeaderTransport{T: h.transport}}
 	opts := &MergeOptions{
-		HttpClient:              client,
-		IO:                      nil,
-		Branch:                  nil,
-		Remotes:                 nil,
+		HttpClient: client,
+		IO:         nil,
+		Repo:       h.baseRepo,
+		PRNumber:   prNumber,
+		//Branch:                  nil,
+		//Remotes:                 nil,
 		DeleteBranch:            false,
 		MergeMethod:             0,
 		AutoMergeEnable:         false,
@@ -635,4 +664,30 @@ func fetchPR(httpClient *http.Client, repo ghrepo.Interface, number int, fields 
 	}
 
 	return &resp.Repository.PullRequest, nil
+}
+
+var pullURLRE = regexp.MustCompile(`^/([^/]+)/([^/]+)/pull/(\d+)`)
+
+func parsePRURL(prURL string) (ghrepo.Interface, int, error) {
+	if prURL == "" {
+		return nil, 0, fmt.Errorf("invalid URL: %q", prURL)
+	}
+
+	u, err := url.Parse(prURL)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	if u.Scheme != "https" && u.Scheme != "http" {
+		return nil, 0, fmt.Errorf("invalid scheme: %s", u.Scheme)
+	}
+
+	m := pullURLRE.FindStringSubmatch(u.Path)
+	if m == nil {
+		return nil, 0, fmt.Errorf("not a pull request URL: %s", prURL)
+	}
+
+	repo := ghrepo.NewWithHost(m[1], m[2], u.Hostname())
+	prNumber, _ := strconv.Atoi(m[3])
+	return repo, prNumber, nil
 }

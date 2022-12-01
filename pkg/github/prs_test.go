@@ -12,8 +12,8 @@ import (
 	"github.com/go-git/go-git/v5"
 	"github.com/go-logr/zapr"
 	"github.com/jlewi/hydros/pkg/files"
+	"github.com/jlewi/hydros/pkg/github/ghrepo"
 	"github.com/jlewi/hydros/pkg/util"
-	"github.com/kubeflow/testing/go/pkg/ghrepo"
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
 )
@@ -227,17 +227,18 @@ func Test_PrepareCommitAndPush(t *testing.T) {
 			return err
 		}
 
-		if err := repo.CreatePr("Hydros e2e test", []string{}); err != nil {
+		pr, err := repo.CreatePr("Hydros e2e test", []string{})
+		if err != nil {
 			return err
 		}
 
-		if err := repo.MergePR(); err != nil {
+		if err := repo.MergePR(pr.Number); err != nil {
 			return err
 		}
 		return nil
 	}()
 
 	if err != nil {
-		t.Fatalf("Failed to clone the repository; error %+v", err)
+		t.Fatalf("Test failed; error %+v", err)
 	}
 }

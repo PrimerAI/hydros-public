@@ -5,7 +5,6 @@ package github
 // https://github.com/cli/cli/blob/trunk/pkg/cmd/pr/merge/merge.go
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"github.com/cli/cli/v2/api"
@@ -51,6 +50,7 @@ type MergeOptions struct {
 
 	// The number for the PR
 	PRNumber int
+	Repo     ghrepo.Interface
 	// Finder is used to fetch status information about the PR.
 	// Finder shared.PRFinder
 	// SelectorArg  string
@@ -287,16 +287,16 @@ func (m *MergeContext) canMerge() error {
 
 	_ = m.warnf("%s Pull request #%d is not mergeable: %s.\n", m.cs.FailureIcon(), m.pr.Number, reason)
 	_ = m.warnf("To have the pull request merged after all the requirements have been met, add the `--auto` flag.\n")
-	if remote := remoteForMergeConflictResolution(m.baseRepo, m.pr, m.opts); remote != nil {
-		mergeOrRebase := "merge"
-		if m.opts.MergeMethod == PullRequestMergeMethodRebase {
-			mergeOrRebase = "rebase"
-		}
-		fetchBranch := fmt.Sprintf("%s %s", remote.Name, m.pr.BaseRefName)
-		mergeBranch := fmt.Sprintf("%s %s/%s", mergeOrRebase, remote.Name, m.pr.BaseRefName)
-		cmd := fmt.Sprintf("gh pr checkout %d && git fetch %s && git %s", m.pr.Number, fetchBranch, mergeBranch)
-		_ = m.warnf("Run the following to resolve the merge conflicts locally:\n  %s\n", m.cs.Bold(cmd))
-	}
+	//if remote := remoteForMergeConflictResolution(m.baseRepo, m.pr, m.opts); remote != nil {
+	//	mergeOrRebase := "merge"
+	//	if m.opts.MergeMethod == PullRequestMergeMethodRebase {
+	//		mergeOrRebase = "rebase"
+	//	}
+	//	fetchBranch := fmt.Sprintf("%s %s", remote.Name, m.pr.BaseRefName)
+	//	mergeBranch := fmt.Sprintf("%s %s/%s", mergeOrRebase, remote.Name, m.pr.BaseRefName)
+	//	cmd := fmt.Sprintf("gh pr checkout %d && git fetch %s && git %s", m.pr.Number, fetchBranch, mergeBranch)
+	//	_ = m.warnf("Run the following to resolve the merge conflicts locally:\n  %s\n", m.cs.Bold(cmd))
+	//}
 	if !useAdmin && allowsAdminOverride(m.pr.MergeStateStatus) {
 		// TODO: show this flag only to repo admins
 		_ = m.warnf("To use administrator privileges to immediately merge the pull request, add the `--admin` flag.\n")
@@ -526,7 +526,17 @@ func NewMergeContext(opts *MergeOptions) (*MergeContext, error) {
 	//	Selector: opts.SelectorArg,
 	//	Fields:   []string{"id", "number", "state", "title", "lastCommit", "mergeStateStatus", "headRepositoryOwner", "headRefName", "baseRefName", "headRefOid", "isInMergeQueue", "isMergeQueueEnabled"},
 	//}
-	fields := []string{"id", "number", "state", "title", "lastCommit", "mergeStateStatus", "headRepositoryOwner", "headRefName", "baseRefName", "headRefOid", "isInMergeQueue", "isMergeQueueEnabled"}
+	if opts.Repo == nil {
+		return nil, errors.New("repo is required")
+	}
+	if opts.PRNumber == 0 {
+		return nil, errors.New("PR number is required")
+	}
+
+	// N.B github/cli/cli was also fetching the fields "isInMergeQueue", "isMergeQueueEnabled" but when I tried
+	// I was getting an error those fields don't exist. I think that might be a preview feature and access to those
+	// fields might be restricted.
+	fields := []string{"id", "number", "state", "title", "lastCommit", "mergeStateStatus", "headRepositoryOwner", "headRefName", "baseRefName", "headRefOid"}
 	pr, err := fetchPR(opts.HttpClient, opts.Repo, opts.PRNumber, fields)
 	//pr, baseRepo, err := opts.Finder.Find(findOptions)
 	if err != nil {
@@ -538,14 +548,14 @@ func NewMergeContext(opts *MergeOptions) (*MergeContext, error) {
 		pr: &api.PullRequest{
 			Number: opts.PRNumber,
 		},
-		cs:                 opts.IO.ColorScheme(),
-		baseRepo:           baseRepo,
-		isTerminal:         opts.IO.IsStdoutTTY(),
-		merged:             pr.State == MergeStateStatusMerged,
-		deleteBranch:       opts.DeleteBranch,
-		crossRepoPR:        pr.HeadRepositoryOwner.Login != baseRepo.RepoOwner(),
-		autoMerge:          opts.AutoMergeEnable && !isImmediatelyMergeable(pr.MergeStateStatus),
-		localBranchExists:  opts.CanDeleteLocalBranch && opts.GitClient.HasLocalBranch(context.Background(), pr.HeadRefName),
+		//		cs:                 opts.IO.ColorScheme(),
+		baseRepo: opts.Repo,
+		//		isTerminal:         opts.IO.IsStdoutTTY(),
+		merged:       pr.State == MergeStateStatusMerged,
+		deleteBranch: opts.DeleteBranch,
+		crossRepoPR:  pr.HeadRepositoryOwner.Login != opts.Repo.RepoOwner(),
+		autoMerge:    opts.AutoMergeEnable && !isImmediatelyMergeable(pr.MergeStateStatus),
+		//		localBranchExists:  opts.CanDeleteLocalBranch && opts.GitClient.HasLocalBranch(context.Background(), pr.HeadRefName),
 		mergeQueueRequired: pr.IsMergeQueueEnabled,
 	}, nil
 }
