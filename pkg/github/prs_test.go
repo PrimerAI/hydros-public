@@ -171,9 +171,9 @@ func Test_PrepareBranch(t *testing.T) {
 	}
 }
 
-// Test_PrepareCommitAndPush tests that we can go through the full cycle of checking out a branch,
-// modifying it, and then committing and pushing the changes.
-func Test_PrepareCommitAndPush(t *testing.T) {
+// Test_FullLifecycle tests that we can go through the full cycle of checking out a branch,
+// modifying it, and then creating and merging a PR.
+func Test_FullLifecycle(t *testing.T) {
 	util.SetupLogger("debug", true)
 
 	tempDir, err := os.MkdirTemp("", "testClone")
