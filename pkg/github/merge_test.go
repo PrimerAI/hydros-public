@@ -4,6 +4,7 @@ package github
 
 import (
 	"github.com/cli/cli/v2/api"
+	"github.com/jlewi/hydros/pkg/util"
 	"net/http"
 	"testing"
 )
@@ -12,7 +13,8 @@ import (
 // The PR is hardcoded so once the PR is successfully merged you would need to create a new one and then update the
 // test.
 func Test_merge_pr(t *testing.T) {
-	prURL := "https://github.com/jlewi/hydros-hydrated/pull/12"
+	util.SetupLogger("info", true)
+	prURL := "https://github.com/jlewi/hydros-hydrated/pull/11"
 	repo, number, err := parsePRURL(prURL)
 	if err != nil {
 		t.Fatalf("Failed to parse URL %v; error %v", prURL, err)
@@ -44,7 +46,7 @@ func Test_merge_pr(t *testing.T) {
 		//Remotes:                 nil,
 		DeleteBranch:            false,
 		MergeMethod:             0,
-		AutoMergeEnable:         false,
+		AutoMergeEnable:         true,
 		AuthorEmail:             "",
 		Body:                    "",
 		BodySet:                 false,

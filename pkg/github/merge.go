@@ -161,7 +161,7 @@ func (m *MergeContext) canMerge() error {
 	}
 
 	log := zapr.NewLogger(zap.L())
-	log.Info("Pull request not mergeable", "number", m.pr.Number, reason)
+	log.Info("Pull request not mergeable", "number", m.pr.Number, "reason", reason)
 	return errors.New("pull request is not mergeable and autoMerge isn't enabled")
 }
 
