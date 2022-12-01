@@ -14,7 +14,7 @@ import (
 // test.
 func Test_merge_pr(t *testing.T) {
 	util.SetupLogger("info", true)
-	prURL := "https://github.com/jlewi/hydros-hydrated/pull/16"
+	prURL := "https://github.com/jlewi/hydros-hydrated/pull/15"
 	repo, number, err := parsePRURL(prURL)
 	if err != nil {
 		t.Fatalf("Failed to parse URL %v; error %v", prURL, err)
@@ -38,15 +38,15 @@ func Test_merge_pr(t *testing.T) {
 
 	client := &http.Client{Transport: &AddHeaderTransport{T: tr}}
 	opts := &MergeOptions{
-		HttpClient:              client,
-		Repo:                    repo,
-		PRNumber:                pr.Number,
-		MergeMethod:             0,
-		AutoMergeEnable:         true,
-		IsDeleteBranchIndicated: false,
-		CanDeleteLocalBranch:    false,
-		MergeStrategyEmpty:      false,
-		MatchHeadCommit:         "",
+		HttpClient:  client,
+		Repo:        repo,
+		PRNumber:    pr.Number,
+		MergeMethod: 0,
+		//AutoMergeEnable:         true,
+		//IsDeleteBranchIndicated: false,
+		//CanDeleteLocalBranch:    false,
+		//MergeStrategyEmpty:      false,
+		//MatchHeadCommit:         "",
 	}
 
 	m, err := NewMergeContext(opts)

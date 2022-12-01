@@ -608,15 +608,10 @@ func (adt *AddHeaderTransport) RoundTrip(req *http.Request) (*http.Response, err
 func (h *RepoHelper) MergePR(prNumber int) error {
 	client := &http.Client{Transport: &AddHeaderTransport{T: h.transport}}
 	opts := &MergeOptions{
-		HttpClient:              client,
-		Repo:                    h.baseRepo,
-		PRNumber:                prNumber,
-		MergeMethod:             0,
-		AutoMergeEnable:         true,
-		IsDeleteBranchIndicated: false,
-		CanDeleteLocalBranch:    false,
-		MergeStrategyEmpty:      false,
-		MatchHeadCommit:         "",
+		HttpClient:  client,
+		Repo:        h.baseRepo,
+		PRNumber:    prNumber,
+		MergeMethod: 0,
 	}
 	m, err := NewMergeContext(opts)
 	if err != nil {
