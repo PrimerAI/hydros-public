@@ -41,7 +41,7 @@ type MergeOptions struct {
 // ErrAlreadyInMergeQueue indicates that the pull request is already in a merge queue
 var ErrAlreadyInMergeQueue = errors.New("already in merge queue")
 
-// MergeContext contains state and dependencies to merge a pull request.
+// prMerger contains state and dependencies to merge a pull request.
 //
 // It is oppinionated about how merges should be done
 // i) If a PR can't be merged e.g. because of status checks then it will enable autoMerge so it will be merged as soon
@@ -49,14 +49,15 @@ var ErrAlreadyInMergeQueue = errors.New("already in merge queue")
 //	as possible
 //
 // ii) It uses squash method to do the merge to preserve linear history.
-type MergeContext struct {
-	pr   *api.PullRequest
-	opts *MergeOptions
-	log  logr.Logger
+type prMerger struct {
+	pr         *api.PullRequest
+	HttpClient *http.Client
+	Repo       ghrepo.Interface
+	log        logr.Logger
 }
 
 // Check if this pull request is in a merge queue
-func (m *MergeContext) inMergeQueue() error {
+func (m *prMerger) inMergeQueue() error {
 	log := m.log
 	// if the pull request is in a merge queue no further action is possible
 	if m.pr.IsInMergeQueue {
@@ -68,8 +69,22 @@ func (m *MergeContext) inMergeQueue() error {
 }
 
 // Merge the pull request.
-func (m *MergeContext) merge() error {
+func (m *prMerger) merge() error {
 	log := m.log
+	pr := m.pr
+
+	if pr.State == MergeStateStatusClosed {
+		log.Info("PR can't be merged it has been closed")
+		return errors.Errorf("Can't merge PR %v it has been closed", pr.URL)
+	}
+	if pr.State == MergeStateStatusMerged {
+		log.Info("PR has already been merged")
+		return nil
+	}
+	if err := m.inMergeQueue(); err != nil {
+		log.Info("PR is already in merge queue")
+		return nil
+	}
 
 	if reason, blocked := blockedReason(m.pr.MergeStateStatus); blocked {
 		log.Info("PR merging is blocked", "reason", reason)
@@ -77,7 +92,7 @@ func (m *MergeContext) merge() error {
 	}
 
 	payload := mergePayload{
-		repo:          m.opts.Repo,
+		repo:          m.Repo,
 		pullRequestID: m.pr.ID,
 		// N.B. We are oppionated and use squash merge to give linear history.
 		method: githubv4.PullRequestMergeMethodSquash,
@@ -101,7 +116,7 @@ func (m *MergeContext) merge() error {
 		}
 	}
 
-	err := mergePullRequest(m.opts.HttpClient, payload)
+	err := mergePullRequest(m.HttpClient, payload)
 	if err != nil {
 		return err
 	}
@@ -115,51 +130,50 @@ func (m *MergeContext) merge() error {
 	return nil
 }
 
-// NewMergeContext creates a new MergeContext.
+type addAcceptHeaderTransport struct {
+	T http.RoundTripper
+}
+
+func (adt *addAcceptHeaderTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Per https://docs.github.com/en/graphql/overview/schema-previews#merge-info-preview
+	// we need to enable previw mode to get mergeStateStatus
+	req.Header.Add("Accept", "application/vnd.github.merge-info-preview+json")
+	return adt.T.RoundTrip(req)
+}
+
+// newPRMerger creates a new prMerger.
 // This will locate the PR and get its current status.
-func NewMergeContext(opts *MergeOptions) (*MergeContext, error) {
-	if opts.Repo == nil {
-		return nil, errors.New("repo is required")
-	}
-	if opts.PRNumber == 0 {
-		return nil, errors.New("PR number is required")
-	}
+func newPRMerger(client *http.Client, repo ghrepo.Interface, number int) (*prMerger, error) {
+	client.Transport = &addAcceptHeaderTransport{T: client.Transport}
 
 	// N.B github/cli/cli was also fetching the fields "isInMergeQueue", "isMergeQueueEnabled" but when I tried
 	// I was getting an error those fields don't exist. I think that might be a preview feature and access to those
 	// fields might be restricted.
 	fields := []string{"id", "number", "state", "title", "lastCommit", "mergeStateStatus", "headRepositoryOwner", "headRefName", "baseRefName", "headRefOid"}
-	pr, err := fetchPR(opts.HttpClient, opts.Repo, opts.PRNumber, fields)
+	pr, err := fetchPR(client, repo, number, fields)
 	if err != nil {
 		return nil, err
 	}
 
 	log := zapr.NewLogger(zap.L()).WithValues("prNumber", pr.Number)
-	return &MergeContext{
-		opts: opts,
-		pr:   pr,
-		log:  log,
+	return &prMerger{
+		Repo:       repo,
+		HttpClient: client,
+		pr:         pr,
+		log:        log,
 	}, nil
 }
 
-// MergePR merges a PR
-func (m *MergeContext) MergePR() error {
-	log := m.log
-	pr := m.pr
+// MergePR merges a PR.
+// client - http client to use to talk to github
+// repo - the repo that owns the PR
+// number - the PR number to merge
+func MergePR(client *http.Client, repo ghrepo.Interface, number int) error {
+	m, err := newPRMerger(client, repo, number)
 
-	if pr.State == MergeStateStatusClosed {
-		log.Info("PR can't be merged it has been closed")
-		return errors.Errorf("Can't merge PR %v it has been closed", pr.URL)
+	if err != nil {
+		return err
 	}
-	if pr.State == MergeStateStatusMerged {
-		log.Info("PR has already been merged")
-		return nil
-	}
-	if err := m.inMergeQueue(); err != nil {
-		log.Info("PR is already in merge queue")
-		return nil
-	}
-
 	if err := m.merge(); err != nil {
 		return err
 	}

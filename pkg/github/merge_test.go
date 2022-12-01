@@ -37,18 +37,9 @@ func Test_merge_pr(t *testing.T) {
 		t.Fatalf("Failed to get github transport manager; error %v", err)
 	}
 
-	client := &http.Client{Transport: &AddHeaderTransport{T: tr}}
-	opts := &MergeOptions{
-		HttpClient: client,
-		Repo:       repo,
-		PRNumber:   pr.Number,
-	}
+	client := &http.Client{Transport: tr}
 
-	m, err := NewMergeContext(opts)
-	if err != nil {
-		t.Fatalf("Failed to create merge context; error %v", err)
-	}
-	if err := m.MergePR(); err != nil {
+	if err := MergePR(client, repo, pr.Number); err != nil {
 		t.Fatalf("Failed to merge the pr; error %v", err)
 	}
 }

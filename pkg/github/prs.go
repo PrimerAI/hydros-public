@@ -591,32 +591,12 @@ func (h *RepoHelper) Dir() string {
 	return h.fullDir
 }
 
-type AddHeaderTransport struct {
-	T http.RoundTripper
-}
-
-func (adt *AddHeaderTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	// Per https://docs.github.com/en/graphql/overview/schema-previews#merge-info-preview
-	// we need to enable previw mode to get mergeStateStatus
-	req.Header.Add("Accept", "application/vnd.github.merge-info-preview+json")
-	return adt.T.RoundTrip(req)
-}
-
 // MergePR tries to merge the PR. This means either
 // 1. enabling auto merge if a merge queue is required
 // 2. merging right away if able
 func (h *RepoHelper) MergePR(prNumber int) error {
-	client := &http.Client{Transport: &AddHeaderTransport{T: h.transport}}
-	opts := &MergeOptions{
-		HttpClient: client,
-		Repo:       h.baseRepo,
-		PRNumber:   prNumber,
-	}
-	m, err := NewMergeContext(opts)
-	if err != nil {
-		return errors.Wrapf(err, "Failed to create merge context")
-	}
-	if err := m.MergePR(); err != nil {
+	client := &http.Client{Transport: h.transport}
+	if err := MergePR(client, h.baseRepo, prNumber); err != nil {
 		h.log.Error(err, "Failed to merge PR (or enable auto merge)")
 		return errors.Wrapf(err, "Failed to merge PR (or enable auto merge)")
 	}
