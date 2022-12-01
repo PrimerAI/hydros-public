@@ -6,13 +6,13 @@ package github
 
 import (
 	"errors"
-	"fmt"
 	"github.com/cli/cli/v2/api"
 	"github.com/cli/cli/v2/git"
-	"github.com/cli/cli/v2/pkg/cmdutil"
 	"github.com/cli/cli/v2/pkg/iostreams"
+	"github.com/go-logr/zapr"
 	"github.com/jlewi/hydros/pkg/github/ghrepo"
 	"github.com/shurcooL/githubv4"
+	"go.uber.org/zap"
 	"net/http"
 	"strings"
 )
@@ -83,138 +83,12 @@ type MergeOptions struct {
 // ErrAlreadyInMergeQueue indicates that the pull request is already in a merge queue
 var ErrAlreadyInMergeQueue = errors.New("already in merge queue")
 
-//func NewCmdMerge(f *cmdutil.Factory, runF func(*MergeOptions) error) *cobra.Command {
-//	opts := &MergeOptions{
-//		IO:         f.IOStreams,
-//		HttpClient: f.HttpClient,
-//		GitClient:  f.GitClient,
-//		Branch:     f.Branch,
-//		Remotes:    f.Remotes,
-//	}
-//
-//	var (
-//		flagMerge  bool
-//		flagSquash bool
-//		flagRebase bool
-//	)
-//
-//	var bodyFile string
-//
-//	cmd := &cobra.Command{
-//		Use:   "merge [<number> | <url> | <branch>]",
-//		Short: "Merge a pull request",
-//		Long: heredoc.Doc(`
-//			Merge a pull request on GitHub.
-//			Without an argument, the pull request that belongs to the current branch
-//			is selected.
-//			When targeting a branch that requires a merge queue, no merge strategy is required.
-//			If required checks have not yet passed, AutoMerge will be enabled.
-//			If required checks have passed, the pull request will be added to the merge queue.
-//			To bypass a merge queue and merge directly, pass the '--admin' flag.
-//    	`),
-//		Args: cobra.MaximumNArgs(1),
-//		RunE: func(cmd *cobra.Command, args []string) error {
-//			opts.Finder = shared.NewFinder(f)
-//
-//			if repoOverride, _ := cmd.Flags().GetString("repo"); repoOverride != "" && len(args) == 0 {
-//				return cmdutil.FlagErrorf("argument required when using the --repo flag")
-//			}
-//
-//			if len(args) > 0 {
-//				opts.SelectorArg = args[0]
-//			}
-//
-//			methodFlags := 0
-//			if flagMerge {
-//				opts.MergeMethod = PullRequestMergeMethodMerge
-//				methodFlags++
-//			}
-//			if flagRebase {
-//				opts.MergeMethod = PullRequestMergeMethodRebase
-//				methodFlags++
-//			}
-//			if flagSquash {
-//				opts.MergeMethod = PullRequestMergeMethodSquash
-//				methodFlags++
-//			}
-//			if methodFlags == 0 {
-//				opts.MergeStrategyEmpty = true
-//			} else if methodFlags > 1 {
-//				return cmdutil.FlagErrorf("only one of --merge, --rebase, or --squash can be enabled")
-//			}
-//
-//			opts.IsDeleteBranchIndicated = cmd.Flags().Changed("delete-branch")
-//			opts.CanDeleteLocalBranch = !cmd.Flags().Changed("repo")
-//
-//			bodyProvided := cmd.Flags().Changed("body")
-//			bodyFileProvided := bodyFile != ""
-//
-//			if err := cmdutil.MutuallyExclusive(
-//				"specify only one of `--auto`, `--disable-auto`, or `--admin`",
-//				opts.AutoMergeEnable,
-//				opts.AutoMergeDisable,
-//				opts.UseAdmin,
-//			); err != nil {
-//				return err
-//			}
-//
-//			if err := cmdutil.MutuallyExclusive(
-//				"specify only one of `--body` or `--body-file`",
-//				bodyProvided,
-//				bodyFileProvided,
-//			); err != nil {
-//				return err
-//			}
-//
-//			if bodyProvided || bodyFileProvided {
-//				opts.BodySet = true
-//				if bodyFileProvided {
-//					b, err := cmdutil.ReadFile(bodyFile, opts.IO.In)
-//					if err != nil {
-//						return err
-//					}
-//					opts.Body = string(b)
-//				}
-//			}
-//
-//			opts.Editor = &userEditor{
-//				io:     opts.IO,
-//				config: f.Config,
-//			}
-//
-//			if runF != nil {
-//				return runF(opts)
-//			}
-//
-//			err := mergeRun(opts)
-//			if errors.Is(err, ErrAlreadyInMergeQueue) {
-//				return nil
-//			}
-//			return err
-//		},
-//	}
-//
-//	cmd.Flags().BoolVar(&opts.UseAdmin, "admin", false, "Use administrator privileges to merge a pull request that does not meet requirements")
-//	cmd.Flags().BoolVarP(&opts.DeleteBranch, "delete-branch", "d", false, "Delete the local and remote branch after merge")
-//	cmd.Flags().StringVarP(&opts.Body, "body", "b", "", "Body `text` for the merge commit")
-//	cmd.Flags().StringVarP(&bodyFile, "body-file", "F", "", "Read body text from `file` (use \"-\" to read from standard input)")
-//	cmd.Flags().StringVarP(&opts.Subject, "subject", "t", "", "Subject `text` for the merge commit")
-//	cmd.Flags().BoolVarP(&flagMerge, "merge", "m", false, "Merge the commits with the base branch")
-//	cmd.Flags().BoolVarP(&flagRebase, "rebase", "r", false, "Rebase the commits onto the base branch")
-//	cmd.Flags().BoolVarP(&flagSquash, "squash", "s", false, "Squash the commits into one commit and merge it into the base branch")
-//	cmd.Flags().BoolVar(&opts.AutoMergeEnable, "auto", false, "Automatically merge only after necessary requirements are met")
-//	cmd.Flags().BoolVar(&opts.AutoMergeDisable, "disable-auto", false, "Disable auto-merge for this pull request")
-//	cmd.Flags().StringVar(&opts.MatchHeadCommit, "match-head-commit", "", "Commit `SHA` that the pull request head must match to allow merge")
-//	cmd.Flags().StringVarP(&opts.AuthorEmail, "author-email", "A", "", "Email `text` for merge commit author")
-//	return cmd
-//}
-
 // MergeContext contains state and dependencies to merge a pull request.
 type MergeContext struct {
-	pr         *api.PullRequest
-	baseRepo   ghrepo.Interface
-	httpClient *http.Client
-	opts       *MergeOptions
+	pr       *api.PullRequest
+	baseRepo ghrepo.Interface
+	//httpClient *http.Client
+	opts *MergeOptions
 	// TODO(jeremy): Can we delete this? Why would we need a color scheme
 	cs *iostreams.ColorScheme
 	// TODO(jeremy): Can we delete this? Why would we need a terminal
@@ -241,9 +115,10 @@ type MergeContext struct {
 
 // Check if this pull request is in a merge queue
 func (m *MergeContext) inMergeQueue() error {
+	log := zapr.NewLogger(zap.L())
 	// if the pull request is in a merge queue no further action is possible
 	if m.pr.IsInMergeQueue {
-		_ = m.warnf("%s Pull request #%d is already queued to merge\n", m.cs.WarningIcon(), m.pr.Number)
+		log.Info("Pull request already in merge queue", "number", m.pr.Number)
 		return ErrAlreadyInMergeQueue
 	}
 	return nil
@@ -285,27 +160,14 @@ func (m *MergeContext) canMerge() error {
 		return nil
 	}
 
-	_ = m.warnf("%s Pull request #%d is not mergeable: %s.\n", m.cs.FailureIcon(), m.pr.Number, reason)
-	_ = m.warnf("To have the pull request merged after all the requirements have been met, add the `--auto` flag.\n")
-	//if remote := remoteForMergeConflictResolution(m.baseRepo, m.pr, m.opts); remote != nil {
-	//	mergeOrRebase := "merge"
-	//	if m.opts.MergeMethod == PullRequestMergeMethodRebase {
-	//		mergeOrRebase = "rebase"
-	//	}
-	//	fetchBranch := fmt.Sprintf("%s %s", remote.Name, m.pr.BaseRefName)
-	//	mergeBranch := fmt.Sprintf("%s %s/%s", mergeOrRebase, remote.Name, m.pr.BaseRefName)
-	//	cmd := fmt.Sprintf("gh pr checkout %d && git fetch %s && git %s", m.pr.Number, fetchBranch, mergeBranch)
-	//	_ = m.warnf("Run the following to resolve the merge conflicts locally:\n  %s\n", m.cs.Bold(cmd))
-	//}
-	if !useAdmin && allowsAdminOverride(m.pr.MergeStateStatus) {
-		// TODO: show this flag only to repo admins
-		_ = m.warnf("To use administrator privileges to immediately merge the pull request, add the `--admin` flag.\n")
-	}
-	return cmdutil.SilentError
+	log := zapr.NewLogger(zap.L())
+	log.Info("Pull request not mergeable", "number", m.pr.Number, reason)
+	return errors.New("pull request is not mergeable and autoMerge isn't enabled")
 }
 
 // Merge the pull request.
 func (m *MergeContext) merge() error {
+	log := zapr.NewLogger(zap.L())
 	if m.merged {
 		return nil
 	}
@@ -326,58 +188,20 @@ func (m *MergeContext) merge() error {
 	if m.shouldAddToMergeQueue() {
 		if !m.opts.MergeStrategyEmpty {
 			// only warn for now
-			_ = m.warnf("%s The merge strategy for %s is set by the merge queue\n", m.cs.Yellow("!"), m.pr.BaseRefName)
+			log.Info("The merge strategy will be set by the merge queue", "baseRef", m.pr.BaseRefName)
+
 		}
 		// auto merge will either enable auto merge or add to the merge queue
 		payload.auto = true
 	}
-	//} else {
-	//	// get user input if not already given
-	//	if m.opts.MergeStrategyEmpty {
-	//		if !m.opts.IO.CanPrompt() {
-	//			return cmdutil.FlagErrorf("--merge, --rebase, or --squash required when not running interactively")
-	//		}
-	//
-	//		apiClient := api.NewClientFromHTTP(m.httpClient)
-	//		r, err := api.GitHubRepo(apiClient, m.baseRepo)
-	//		if err != nil {
-	//			return err
-	//		}
-	//
-	//		//payload.method, err = mergeMethodSurvey(r)
-	//		//if err != nil {
-	//		//	return err
-	//		//}
-	//		//
-	//		//m.deleteBranch, err = deleteBranchSurvey(m.opts, m.crossRepoPR, m.localBranchExists)
-	//		//if err != nil {
-	//		//	return err
-	//		//}
-	//		//
-	//		//allowEditMsg := payload.method != PullRequestMergeMethodRebase
-	//		//for {
-	//		//	action, err := confirmSurvey(allowEditMsg)
-	//		//	if err != nil {
-	//		//		return fmt.Errorf("unable to confirm: %w", err)
-	//		//	}
-	//		//
-	//		//	submit, err := confirmSubmission(m.httpClient, m.opts, action, &payload)
-	//		//	if err != nil {
-	//		//		return err
-	//		//	}
-	//		//	if submit {
-	//		//		break
-	//		//	}
-	//		//}
-	//	}
 
-	err := mergePullRequest(m.httpClient, payload)
+	err := mergePullRequest(m.opts.HttpClient, payload)
 	if err != nil {
 		return err
 	}
 
 	if m.shouldAddToMergeQueue() {
-		_ = m.infof("%s Pull request #%d will be added to the merge queue for %s when ready\n", m.cs.SuccessIconWithColor(m.cs.Green), m.pr.Number, m.pr.BaseRefName)
+		log.Info("Pull request will be added to the merge queue when ready", "number", m.pr.Number, "baseRef", m.pr.BaseRefName)
 		return nil
 	}
 
@@ -389,7 +213,8 @@ func (m *MergeContext) merge() error {
 		case PullRequestMergeMethodSquash:
 			method = " via squash"
 		}
-		return m.infof("%s Pull request #%d will be automatically merged%s when all requirements are met\n", m.cs.SuccessIconWithColor(m.cs.Green), m.pr.Number, method)
+		log.Info("Pull request will be automatically merged when all requirements are met", "prNumber", m.pr.Number, "method", method)
+		return nil
 	}
 
 	action := "Merged"
@@ -399,7 +224,8 @@ func (m *MergeContext) merge() error {
 	case PullRequestMergeMethodSquash:
 		action = "Squashed and merged"
 	}
-	return m.infof("%s %s pull request #%d (%s)\n", m.cs.SuccessIconWithColor(m.cs.Magenta), action, m.pr.Number, m.pr.Title)
+	log.Info("pull request was merged", "method", action, "prNumber", m.pr.Number, "title", m.pr.Title)
+	return nil
 }
 
 // TODO(jeremy): I think we can drop this; there should be no reason to delete local branches.
@@ -503,19 +329,6 @@ func (m *MergeContext) shouldAddToMergeQueue() bool {
 	return m.mergeQueueRequired
 }
 
-func (m *MergeContext) warnf(format string, args ...interface{}) error {
-	_, err := fmt.Fprintf(m.opts.IO.ErrOut, format, args...)
-	return err
-}
-
-func (m *MergeContext) infof(format string, args ...interface{}) error {
-	if !m.isTerminal {
-		return nil
-	}
-	_, err := fmt.Fprintf(m.opts.IO.ErrOut, format, args...)
-	return err
-}
-
 // NewMergeContext creates a new MergeContext.
 // This will locate the PR and get its current status.
 func NewMergeContext(opts *MergeOptions) (*MergeContext, error) {
@@ -545,9 +358,7 @@ func NewMergeContext(opts *MergeOptions) (*MergeContext, error) {
 
 	return &MergeContext{
 		opts: opts,
-		pr: &api.PullRequest{
-			Number: opts.PRNumber,
-		},
+		pr:   pr,
 		//		cs:                 opts.IO.ColorScheme(),
 		baseRepo: opts.Repo,
 		//		isTerminal:         opts.IO.IsStdoutTTY(),
@@ -561,13 +372,9 @@ func NewMergeContext(opts *MergeOptions) (*MergeContext, error) {
 }
 
 // MergePR merges a PR
-func MergePR(opts *MergeOptions) error {
-	ctx, err := NewMergeContext(opts)
-	if err != nil {
-		return err
-	}
+func (m *MergeContext) MergePR() error {
 
-	if err := ctx.inMergeQueue(); err != nil {
+	if err := m.inMergeQueue(); err != nil {
 		return err
 	}
 
@@ -579,11 +386,11 @@ func MergePR(opts *MergeOptions) error {
 	//
 	//ctx.warnIfDiverged()
 
-	if err := ctx.canMerge(); err != nil {
+	if err := m.canMerge(); err != nil {
 		return err
 	}
 
-	if err := ctx.merge(); err != nil {
+	if err := m.merge(); err != nil {
 		return err
 	}
 

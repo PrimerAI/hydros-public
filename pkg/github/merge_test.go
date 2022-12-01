@@ -12,7 +12,7 @@ import (
 // The PR is hardcoded so once the PR is successfully merged you would need to create a new one and then update the
 // test.
 func Test_merge_pr(t *testing.T) {
-	prURL := "https://github.com/jlewi/hydros-hydrated/pull/13"
+	prURL := "https://github.com/jlewi/hydros-hydrated/pull/12"
 	repo, number, err := parsePRURL(prURL)
 	if err != nil {
 		t.Fatalf("Failed to parse URL %v; error %v", prURL, err)
@@ -54,7 +54,12 @@ func Test_merge_pr(t *testing.T) {
 		MergeStrategyEmpty:      false,
 		MatchHeadCommit:         "",
 	}
-	if err := MergePR(opts); err != nil {
+
+	m, err := NewMergeContext(opts)
+	if err != nil {
+		t.Fatalf("Failed to create merge context; error %v", err)
+	}
+	if err := m.MergePR(); err != nil {
 		t.Fatalf("Failed to merge the pr; error %v", err)
 	}
 }

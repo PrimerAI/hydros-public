@@ -628,8 +628,11 @@ func (h *RepoHelper) MergePR(prNumber int) error {
 		MergeStrategyEmpty:      false,
 		MatchHeadCommit:         "",
 	}
-
-	if err := MergePR(opts); err != nil {
+	m, err := NewMergeContext(opts)
+	if err != nil {
+		return errors.Wrapf(err, "Failed to create merge context")
+	}
+	if err := m.MergePR(); err != nil {
 		h.log.Error(err, "Failed to merge PR (or enable auto merge)")
 		return errors.Wrapf(err, "Failed to merge PR (or enable auto merge)")
 	}
